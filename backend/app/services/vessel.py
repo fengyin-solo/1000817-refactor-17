@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain import vessel_rules
 from app.store import store
 
 MODULE = "vessel"
 REQUIRED_FIELDS = ["船舶编号", "船舶名称", "船舶类型"]
+# 选填字段：登记时带上就原样保存，规则模块据此判定船籍；不带不影响既有登记流程
+OPTIONAL_FIELDS = ["船籍"]
 STATUS_ORDER = ["待登记", "在册可用", "在港作业", "已停用"]
 ACTION_RULES = {"登记船舶": "在册可用", "标记在港": "在港作业", "停用船舶": "已停用"}
 NEGATIVE_ACTIONS = ["停用船舶"]
@@ -28,10 +31,14 @@ class VesselService:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        # 列表口径与详情同源：判定字段统一由 vessel_rules 挂出，不在本处另写规则
+        page_rows = [vessel_rules.annotate(row) for row in rows[start:start + size]]
+        return page_rows, total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        entry = store.find(MODULE, entry_id)
+        # 详情与列表走同一个 annotate，保证船籍/船型结论完全一致
+        return vessel_rules.annotate(entry) if entry is not None else None
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
@@ -40,11 +47,14 @@ class VesselService:
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
+        for field in OPTIONAL_FIELDS:
+            if str(values.get(field) or "").strip():
+                entry[field] = values.get(field)
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
-        return entry, []
+        return vessel_rules.annotate(entry), []
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(MODULE, entry_id)
@@ -58,4 +68,4 @@ class VesselService:
         entry["status"] = target
         entry["pending"] = target != STATUS_ORDER[-1]
         entry["abnormal"] = action in NEGATIVE_ACTIONS
-        return entry, f"船舶已{action}"
+        return vessel_rules.annotate(entry), f"船舶已{action}"

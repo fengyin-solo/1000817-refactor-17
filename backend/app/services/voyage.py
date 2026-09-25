@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain import vessel_rules
 from app.store import store
 
 MODULE = "voyage"
+VESSEL_MODULE = "vessel"
 REQUIRED_FIELDS = ["航次编号", "关联船舶", "进口航次号"]
 STATUS_ORDER = ["待开航", "航行中", "已到港", "已结航"]
 ACTION_RULES = {"确认开航": "航行中", "确认到港": "已到港", "结航航次": "已结航"}
@@ -36,13 +38,21 @@ class VoyageService:
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
         if missing:
-            return None, missing
+            return None, [f"缺少必填字段：{'、'.join(missing)}"]
+        # 航次关联校验：与船舶列表/详情共用 vessel_rules 这一份口径。
+        # 只校验新登记航次，store 里的历史航次数据不会走到这里，关联保持原样。
+        link = vessel_rules.check_voyage_link(values, store.rows(VESSEL_MODULE))
+        if not link.ok:
+            return None, link.errors
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
+        # 留档反查到的船籍/船型口径，方便日后核对；既有展示列不受影响
+        entry[vessel_rules.DERIVED_REGISTRY_CLASS] = link.registry_class
+        entry[vessel_rules.DERIVED_VESSEL_CLASS] = link.vessel_class
         rows.append(entry)
         return entry, []
 
