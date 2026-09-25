@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.vessel_rules import VESSEL_MODULE, validate_voyage_vessel
 from app.store import store
 
 MODULE = "voyage"
@@ -33,10 +34,18 @@ class VoyageService:
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
 
-    def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    def create_entry(
+        self,
+        values: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, list[str], list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
         if missing:
-            return None, missing
+            return None, missing, []
+
+        _vessel, association_issues = validate_voyage_vessel(values, store.rows(VESSEL_MODULE))
+        if association_issues:
+            return None, [], association_issues
+
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
@@ -44,7 +53,7 @@ class VoyageService:
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
-        return entry, []
+        return entry, [], []
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(MODULE, entry_id)
